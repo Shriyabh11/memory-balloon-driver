@@ -1,22 +1,27 @@
+CC      = gcc
+CFLAGS  = -Wall -Wextra -g
+LDFLAGS = -lrt
 
-
-CC     = gcc
-CFLAGS = -Wall -Wextra -g
-
-all: host guest
+all: host guest monitor
 	@echo ""
-	@echo "Done! Now run:"
-	@echo "  Terminal 1: ./host          (enter your config)"
-	@echo "  Terminal 2: ./guest 1"
-	@echo "  Terminal 3: ./guest 2       (if you chose 2+ VMs)"
-	@echo "  Terminal 4: ./guest 3       (if you chose 3+ VMs)"
+	@echo "Build successful! Run in separate terminals:"
+	@echo "  Terminal 1:  ./host"
+	@echo "  Terminal 2:  ./guest 1"
+	@echo "  Terminal 3:  ./guest 2       (if you chose 2+ VMs)"
+	@echo "  Terminal 4:  ./monitor       (optional live dashboard)"
+	@echo ""
 
 host: host.c shared_mem.h
-	$(CC) $(CFLAGS) host.c -o host
+	$(CC) $(CFLAGS) host.c -o host $(LDFLAGS)
 
 guest: guest.c shared_mem.h
-	$(CC) $(CFLAGS) guest.c -o guest
+	$(CC) $(CFLAGS) guest.c -o guest $(LDFLAGS)
+
+monitor: monitor.c shared_mem.h
+	$(CC) $(CFLAGS) monitor.c -o monitor $(LDFLAGS)
 
 clean:
-	rm -f host guest
-	rm -f /dev/shm/balloon_*    # clean up any leftover shared memory
+	rm -f host guest monitor
+	rm -f /dev/shm/balloon_*
+
+.PHONY: all clean
