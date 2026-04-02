@@ -52,7 +52,7 @@ int main(void)
     printf("╚══════════════════════════════════════╝\n\n");
 
     /* open config region */
-    int cfg_fd = shm_open(SHM_CONFIG_NAME, O_RDONLY, 0666);
+    int cfg_fd = open(SHM_CONFIG_NAME, O_RDONLY, 0666);
     if (cfg_fd == -1) {
         printf("Can't find %s — start the host first.\n", SHM_CONFIG_NAME);
         return 1;
@@ -79,7 +79,7 @@ int main(void)
         char name[64];
         snprintf(name, sizeof(name), "%s%d", SHM_NAME_PREFIX, i + 1);
 
-        int fd = shm_open(name, O_RDONLY, 0666);
+        int fd = open(name, O_RDONLY, 0666);
         if (fd == -1) {
             printf("Can't open %s — host may not have created it yet\n", name);
             vms[i] = NULL;

@@ -21,23 +21,23 @@
 #include <time.h>
 #include "shared_mem.h"
 
-/* ── user-configurable values ── */
+//user-configurable values 
 static int num_vms      = 0;
 static int max_pages    = 0;
 static int inflate_step = 0;
 static int loop_delay   = 0;
 
-/* ── per-VM tracking ── */
+//per-VM tracking 
 static struct balloon_shm *vms[MAX_VMS_LIMIT];
 static int                 shm_fds[MAX_VMS_LIMIT];
 
-/* ── config shared memory ── */
+//config shared memory 
 static struct balloon_config *cfg    = NULL;
-static int                    cfg_fd = -1;
+static int cfg_fd = -1;
 
 static int running = 1;
 
-/* ── timestamped logging ── */
+// timestamped logging 
 static void host_log(const char *fmt, ...)
 {
     time_t now = time(NULL);
@@ -50,7 +50,7 @@ static void host_log(const char *fmt, ...)
     va_end(ap);
 }
 
-/* ── safe integer input ── */
+//safe integer input 
 int read_int(const char *prompt, int min, int max)
 {
     int value;
@@ -59,7 +59,7 @@ int read_int(const char *prompt, int min, int max)
         fflush(stdout);
 
         if (scanf("%d", &value) == 1) {
-            while (getchar() != '\n');   /* eat leftover newline */
+            while (getchar() != '\n'); 
             if (value >= min && value <= max)
                 return value;
             printf("  Out of range, try again.\n");
@@ -82,29 +82,29 @@ void ask_user_config(void)
     printf("─── How many VMs? ────────────────────────\n");
     printf("Each VM runs as a separate ./guest process.\n");
     num_vms = read_int("Number of VMs", 1, MAX_VMS_LIMIT);
-    printf("  ✓ %d VM(s)\n\n", num_vms);
+    printf("  %d VM(s)\n\n", num_vms);
 
     /* question 2 */
     printf("─── Max balloon size per VM (pages)? ─────\n");
     printf("1 page = 4KB — try 200 for a quick demo.\n");
     max_pages = read_int("Max pages", 10, MAX_PAGES_LIMIT);
-    printf("  ✓ %d pages = %dKB per VM\n\n",
+    printf(" %d pages = %dKB per VM\n\n",
            max_pages, max_pages * (PAGE_SIZE_SIM / 1024));
 
     /* question 3 */
     printf("─── Inflate step size? ───────────────────\n");
-    printf("Pages grabbed per inflate. Smaller = smoother.\n");
+    printf("Pages grabbed per inflate\n");
     int step_max = max_pages / 2;
     if (step_max < 1) step_max = 1;
     inflate_step = read_int("Step (pages)", 1, step_max);
-    printf("  ✓ %d pages per inflate = %dKB\n\n",
+    printf("  %d pages per inflate = %dKB\n\n",
            inflate_step, inflate_step * (PAGE_SIZE_SIM / 1024));
 
     /* question 4 */
     printf("─── Seconds between host decisions? ──────\n");
     printf("1 = fast, 5 = slow and easy to follow.\n");
     loop_delay = read_int("Delay (sec)", 1, 10);
-    printf("  ✓ %d second(s)\n\n", loop_delay);
+    printf("  %d second(s)\n\n", loop_delay);
 
     /* summary box */
     printf("╔══════════════════════════════════════════╗\n");
@@ -121,8 +121,8 @@ void ask_user_config(void)
     printf("╚══════════════════════════════════════════╝\n\n");
 
     /* write config to shared memory so guests can pick it up */
-    cfg_fd = shm_open(SHM_CONFIG_NAME, O_CREAT | O_RDWR, 0666);
-    if (cfg_fd == -1) { perror("shm_open config"); exit(1); }
+    cfg_fd = open(SHM_CONFIG_NAME, O_CREAT | O_RDWR, 0666);
+    if (cfg_fd == -1) { perror("open config"); exit(1); }
 
     ftruncate(cfg_fd, sizeof(struct balloon_config));
 
@@ -139,23 +139,38 @@ void ask_user_config(void)
     host_log("Config published to %s\n\n", SHM_CONFIG_NAME);
 }
 
-/* Create one VM's shared memory region */
+/* Create one VM's shared memory region 
+Its of type balloon_shm, defined in shared_mem.h, and returns a pointer to it.
+This is where the host and guest will communicate about commands, current pages, pressure, etc.
+*/
+
 struct balloon_shm *create_vm_shm(int vm_num, int *fd_out)
 {
     char name[64];
-    snprintf(name, sizeof(name), "%s%d", SHM_NAME_PREFIX, vm_num);
+    snprintf(name, sizeof(name), "%s%d", SHM_NAME_PREFIX, vm_num); //this takes the prefix("/balloon_vm") and the vm number and creates a unique name for each vm
+    int fd = open(name, O_CREAT | O_RDWR, 0666); //create a file-backed shared memory region for "/tmp/balloon_vmX"
+    //open() creates the file if it doesn't exist (O_CREAT)
+    //O_RDWR = open for reading and writing
+    //0666 = file permissions (rw-rw-rw-)
+    //MAP_SHARED (used in mmap below) is what prevents copy-on-write, not permissions
+    if (fd == -1) { perror("open vm"); exit(1); }
 
-    int fd = shm_open(name, O_CREAT | O_RDWR, 0666);
-    if (fd == -1) { perror("shm_open vm"); exit(1); }
-
-    ftruncate(fd, sizeof(struct balloon_shm));
+    ftruncate(fd, sizeof(struct balloon_shm)); //this is used to set the size of the shared memory object
 
     struct balloon_shm *shm = mmap(NULL, sizeof(struct balloon_shm),
                                    PROT_READ | PROT_WRITE,
                                    MAP_SHARED, fd, 0);
+    //mmap is used to map the shared memory object to the address space of the process (in this case, the host process)
+    //PROT_READ | PROT_WRITE = the shared memory object is mapped for reading and writing
+    //MAP_SHARED = the shared memory object is mapped for sharing between processes
+    //fd = the file descriptor of the shared memory object
+    //0 = offset from the beginning of the shared memory object
     if (shm == MAP_FAILED) { perror("mmap vm"); exit(1); }
 
     memset(shm, 0, sizeof(struct balloon_shm));
+    //memset is used to fill the shared memory object with zeros
+    //this is done to ensure that the shared memory object is initialized to zero
+    //before it is used by the guest process
 
     *fd_out = fd;
     return shm;
@@ -166,6 +181,8 @@ void wait_for_guests(void)
 {
     host_log("Waiting for %d guest(s)...\n", num_vms);
     host_log("Start them in separate terminals:\n");
+    //separate terminals are needed because each guest is its own interactive process
+    //with its own stdout, so they each need their own terminal window
     for (int i = 1; i <= num_vms; i++)
         printf("         ./guest %d\n", i);
     printf("\n");
@@ -220,7 +237,14 @@ int find_fullest_vm(void)
     return best;
 }
 
-/* Tell a VM to inflate by one step */
+// Tell a VM to inflate by one step 
+// the logic is to increase the target pages by the inflate step size
+// and then set the command to CMD_INFLATE
+// the guest will then try to allocate memory to reach the target pages
+// and the host will wait for the guest to reach the target pages
+// if the guest does not reach the target pages within 10 seconds, the host will give up
+// and the guest will be left with the current number of pages  
+
 void inflate_vm(int idx)
 {
     struct balloon_shm *vm = vms[idx];
@@ -303,7 +327,7 @@ void print_dashboard(int cycle)
         /* visual bar, 25 chars wide */
         char bar[26];
         for (int j = 0; j < 25; j++)
-            bar[j] = (j < pct) ? '█' : '░';
+            bar[j] = (j < pct) ? '#' : '.';
         bar[25] = '\0';
 
         const char *p_str = "OK  ";
@@ -324,9 +348,13 @@ void print_dashboard(int cycle)
     printf("└──────────────────────────────────────────────────────────┘\n\n");
 }
 
-/* ── signal + cleanup ── */
+//signal handler for graceful shutdown
+//this is used to catch the SIGINT signal (Ctrl+C) and set the running flag to 0
+//this will cause the main loop to exit and the program to terminate
 void handle_signal(int s) { (void)s; running = 0; }
 
+//cleanup function — deflates all VMs, unmaps shared memory,
+//closes file descriptors, and unlinks shm objects so they don't leak
 void cleanup(void)
 {
     printf("\n");
@@ -350,20 +378,20 @@ void cleanup(void)
 
     for (int i = 0; i < num_vms; i++) {
         char name[64];
-        snprintf(name, sizeof(name), "%s%d", SHM_NAME_PREFIX, i + 1);
-        if (vms[i])     munmap(vms[i], sizeof(struct balloon_shm));
-        if (shm_fds[i]) close(shm_fds[i]);
-        shm_unlink(name);
+        snprintf(name, sizeof(name), "%s%d", SHM_NAME_PREFIX, i + 1); 
+        if (vms[i])     munmap(vms[i], sizeof(struct balloon_shm));//unmap the shared memory object
+        if (shm_fds[i]) close(shm_fds[i]);//close the file descriptor
+        unlink(name);//delete the shared memory file
     }
 
-    if (cfg)    munmap(cfg, sizeof(struct balloon_config));
-    if (cfg_fd) close(cfg_fd);
-    shm_unlink(SHM_CONFIG_NAME);
+    if (cfg)    munmap(cfg, sizeof(struct balloon_config));//unmap the shared memory object
+    if (cfg_fd) close(cfg_fd);//close the file descriptor
+    unlink(SHM_CONFIG_NAME);//delete the config file
 
     host_log("Done!\n");
 }
 
-/* ── main ── */
+//main function
 int main(void)
 {
     signal(SIGINT, handle_signal);

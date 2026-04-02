@@ -20,7 +20,7 @@
 #include <time.h>
 #include "shared_mem.h"
 
-/* ── globals ── */
+//globals
 static void                **pages_held = NULL;
 static int                   page_count = 0;
 static struct balloon_shm   *shm        = NULL;
@@ -30,16 +30,16 @@ static int                   cfg_fd     = -1;
 static int                   my_vm_id   = 0;
 static int                   running    = 1;
 
-/* pulled from host's config region */
+//pulled from host's config region 
 static int max_pages    = 0;
 static int inflate_step = 0;
 
-/* local stats */
+//local stats
 static int stat_total_inflated = 0;
 static int stat_total_deflated = 0;
 static int stat_peak_pages     = 0;
 
-/* ── timestamped logging ── */
+//timestamped logging
 static void vm_log(const char *fmt, ...)
 {
     time_t now = time(NULL);
@@ -52,22 +52,24 @@ static void vm_log(const char *fmt, ...)
     va_end(ap);
 }
 
-/* ── read config written by host ── */
+//read config written by host
 void read_config(void)
 {
     vm_log("Looking for host config...\n");
 
-    cfg_fd = shm_open(SHM_CONFIG_NAME, O_RDONLY, 0666);
+    cfg_fd = open(SHM_CONFIG_NAME, O_RDONLY, 0666); //open the config file for reading
     if (cfg_fd == -1) {
         vm_log("Can't find %s — is the host running?\n", SHM_CONFIG_NAME);
         exit(1);
     }
 
     cfg = mmap(NULL, sizeof(struct balloon_config),
-               PROT_READ, MAP_SHARED, cfg_fd, 0);
+               PROT_READ, MAP_SHARED, cfg_fd, 0); //map the shared memory object to the address space of the process
+    //in host.c we used PROT_READ | PROT_WRITE because host needs to write to the shared memory object
+    //but here we only need to read from the shared memory object
     if (cfg == MAP_FAILED) { perror("mmap config"); exit(1); }
 
-    /* spin until host signals config_ready */
+    //spin until host signals config_ready
     while (cfg->config_ready != 1) {
         printf("\r");
         vm_log("Waiting for host to finish config...");
@@ -89,16 +91,18 @@ void read_config(void)
     }
 }
 
-/* ── connect to this VM's shared memory region ── */
+//connect to this VM's shared memory region
+//It opens the shared memory object for this VM and maps it to the address space of the process
+//This is where the host and guest will communicate about commands, current pages, pressure, etc.
 void open_vm_shm(void)
 {
     char name[64];
-    snprintf(name, sizeof(name), "%s%d", SHM_NAME_PREFIX, my_vm_id);
+    snprintf(name, sizeof(name), "%s%d", SHM_NAME_PREFIX, my_vm_id); //create the name of the shared memory object
 
     vm_log("Connecting to %s\n", name);
 
     for (int try = 0; try < 10; try++) {
-        shm_fd = shm_open(name, O_RDWR, 0666);
+        shm_fd = open(name, O_RDWR, 0666);
         if (shm_fd != -1) break;
         vm_log("Host hasn't created it yet, retrying (%d/10)...\n", try + 1);
         sleep(1);
@@ -110,7 +114,10 @@ void open_vm_shm(void)
     }
 
     shm = mmap(NULL, sizeof(struct balloon_shm),
-               PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+               PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0); //map the shared memory object to the address space of the process
+    //here we use PROT_READ | PROT_WRITE because both host and guest will read from and write to the shared memory object
+    //function before this didn't have read and write permissions because it was only reading from the shared memory object of config
+    //here this is a different shared memory object, it is used for communication between host and guest
     if (shm == MAP_FAILED) { perror("mmap vm"); exit(1); }
 
     vm_log("Connected!\n");
@@ -235,7 +242,7 @@ void simulate_pressure(void)
     }
 
     if (shm->pressure == PRESSURE_CRITICAL)
-        vm_log("⚠ CRITICAL pressure! Balloon at %d%%, need memory back!\n", pct_full);
+        vm_log("CRITICAL pressure! Balloon at %d%%, need memory back!\n", pct_full);
     else if (shm->pressure == PRESSURE_LOW)
         vm_log("Pressure: low (balloon at %d%%)\n", pct_full);
 }

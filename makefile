@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -g
-LDFLAGS = -lrt
+LDFLAGS =
 
 all: host guest monitor
 	@echo ""
@@ -22,6 +22,6 @@ monitor: monitor.c shared_mem.h
 
 clean:
 	rm -f host guest monitor
-	rm -f /dev/shm/balloon_*
+	rm -f /tmp/balloon_*
 
 .PHONY: all clean
