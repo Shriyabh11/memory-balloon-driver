@@ -1,0 +1,16 @@
+# Compiled binaries
+host
+guest
+monitor
+
+# Object files
+*.o
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+
+# OS generated files
+.DS_Store
+Thumbs.db
