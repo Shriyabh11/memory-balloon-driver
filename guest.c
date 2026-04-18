@@ -137,14 +137,14 @@ static void update_peak(void)
 }
 
 /*
- * Inflate — grab pages until we reach the target.
+ * Inflate - honestly just grabbing pages until we hit the target from the host.
  *
- * Each malloc(PAGE_SIZE_SIM) simulates what alloc_page() does
- * in the real Linux kernel: take one 4KB page away from the
- * guest's free list and hand it to the balloon.
+ * Doing this with malloc() to fake what alloc_page() does in the actual kernel. 
+ * It basically yanks a 4KB page from the guest's available memory.
  *
- * We memset the page so the OS actually backs it with physical
- * memory (otherwise it's just a lazy virtual mapping).
+ * Gotcha: have to memset() the page here. If we don't, the OS gets lazy 
+ * and just makes a virtual map without actually backing it with physical RAM. 
+ * Learned that the hard way...
  */
 void do_inflate(int target)
 {
@@ -178,15 +178,13 @@ void do_inflate(int target)
 }
 
 /*
- * Deflate — free pages down to the target.
+ * Deflate - giving memory back to the guest.
  *
- * Each free() simulates __free_page() in the real kernel:
- * return a page from the balloon back to the guest's free list
- * so the guest can use that memory again.
+ * free() here acts like __free_page() normally would. It pops a page out of 
+ * the balloon and hands it back so applications can actually use it again.
  *
- * Unlike the old version that always freed everything, this
- * supports partial deflation — the host can ask us to shrink
- * to any target, not just zero.
+ * Added support for partial deflation so we don't have to dump the entire balloon 
+ * at once (host can just tell us to shrink to a specific target).
  */
 void do_deflate(int target)
 {
@@ -215,9 +213,10 @@ void do_deflate(int target)
 }
 
 /*
- * OOM Killer — when pressure stays CRITICAL with no relief,
- * simulate Linux forcefully killing a process to reclaim memory.
- * We instantly free 25% of the balloon to save the VM from crashing.
+ * OOM (Out Of Memory) Killer panic mode.
+ * If the host ignores our CRITICAL pressure for too long, we have to start 
+ * killing things to survive. Simulating Linux dropping the hammer on a random process.
+ * We'll dump 25% of the balloon to keep the VM alive.
  */
 void trigger_oom_killer(void)
 {
@@ -255,13 +254,12 @@ void trigger_oom_killer(void)
 }
 
 /*
- * Simulate memory pressure — in a real VM this would come
- * from Linux's shrinker callbacks or /proc/meminfo.
- *
- * We only fake pressure when the balloon is taking up a
- * significant chunk of memory. The probabilities are:
- *   balloon > 80% full → 10% chance critical, 20% low
- *   balloon > 50% full → 5% chance critical, 10% low
+ * Faking memory pressure for the userspace demo. In the kernel version, 
+ * we pull this stuff directly from si_meminfo() or shrinker callbacks.
+ * 
+ * Logic is pretty simple: if the balloon gets too big, start throwing warnings.
+ * - > 80% full: 10% chance of critical failure
+ * - > 50% full: just mildly annoyed (low pressure)
  */
 void simulate_pressure(void)
 {

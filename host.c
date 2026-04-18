@@ -159,9 +159,9 @@ void ask_user_config(void)
 }
 
 /* Create one VM's shared memory region 
-Its of type balloon_shm, defined in shared_mem.h, and returns a pointer to it.
-This is where the host and guest will communicate about commands, current pages, pressure, etc.
-*/
+ * This is arguably the most important part of the host setup because creating this /tmp 
+ * file is how we actually talk to the guest. It acts just like a PCI virtqueue.
+ */
 
 struct balloon_shm *create_vm_shm(int vm_num, int *fd_out)
 {
@@ -221,7 +221,9 @@ void wait_for_guests(void)
     host_log("All guests connected!\n\n");
 }
 
-/* Helper to calculate ideal balloon pages based on weights */
+/* Helper to calculate ideal balloon pages based on weights. 
+ * This is the core math behind the "fair-share" memory distribution algorithm. 
+ */
 int calculate_ideal_share(int vm_idx)
 {
     int total_balloon = 0;
@@ -332,9 +334,9 @@ void inflate_vm(int idx)
 }
 
 /*
- * Tell a VM to deflate — either partially or fully.
- * If target is 0, it frees everything. Otherwise it
- * shrinks to half its current size for a gentler release.
+ * Tell a VM to deflate - giving memory back to the system.
+ * If target is 0, we're emptying the balloon (usually because they yelled CRITICAL pressure).
+ * Otherwise, cut it in half for a gentler release. We don't want to over-correct.
  */
 void deflate_vm(int idx, int full)
 {

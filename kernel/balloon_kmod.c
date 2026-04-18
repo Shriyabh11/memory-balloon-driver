@@ -75,18 +75,16 @@ MODULE_PARM_DESC(max_pages, "Maximum balloon size in pages (1 page = 4KB)");
 /* ════════════════════════════════════════════════════════════════
  * INTERNAL STATE
  *
- * In guest.c we had:
- *   static void **pages_held = NULL;  — flat array of malloc'd pointers
- *   static int page_count = 0;        — how many pages we're holding
+ * In guest.c we just used a flat array (`pages_held`) because userspace limits 
+ * don't really matter. But here in kernel land, arrays are bad for memory tracking.
  *
- * Here we use a kernel linked list instead. Each node holds a pointer
- * to a `struct page` — the kernel's representation of a physical page.
+ * So instead we are using a genuine kernel linked list. Each node points to a 
+ * `struct page` (which is the kernel's way of tracking physical RAM).
  *
- * WHY A LINKED LIST?
- *   - No need to pre-allocate a fixed-size array
- *   - O(1) add/remove from either end
- *   - This is EXACTLY how the real virtio_balloon tracks pages
- *   - list_head is used everywhere in the kernel (task list, inode list, etc.)
+ * Honestly, linked lists are just better here:
+ *   - No fixed size limits
+ *   - O(1) popping/pushing 
+ *   - And most importantly, this is exactly how the real virtio_balloon driver does it.
  * ════════════════════════════════════════════════════════════════ */
 
 /*
@@ -172,32 +170,15 @@ static int detect_real_pressure(void)
 }
 
 /* ════════════════════════════════════════════════════════════════
- * INFLATE: GRAB PAGES FROM THE KERNEL'S BUDDY ALLOCATOR
+ * INFLATE: THE REAL DEAL (Buddy Allocator)
  *
- * This is the kernel equivalent of do_inflate() in guest.c.
+ * This is where things get real. We swap out guest.c's `malloc` for the actual 
+ * `alloc_page(GFP_KERNEL)`. 
  *
- * In guest.c we did:
- *   void *page = malloc(PAGE_SIZE_SIM);      // fake: userspace heap
- *   memset(page, 0xAB, PAGE_SIZE_SIM);       // touch to force backing
- *   pages_held[page_count++] = page;          // track in flat array
- *
- * Here we do:
- *   struct page *pg = alloc_page(GFP_KERNEL); // real: buddy allocator
- *   void *addr = page_address(pg);            // get kernel virtual address
- *   memset(addr, 0xAB, PAGE_SIZE);            // touch it (same reason)
- *   list_add(&bp->list, &balloon_pages);      // track in linked list
- *
- * alloc_page(GFP_KERNEL) does the following inside the kernel:
- *   1. Checks the per-CPU page cache (fast path)
- *   2. Falls back to the buddy allocator if cache is empty
- *   3. Finds a free page frame in physical memory
- *   4. Returns a struct page* pointing to that frame's metadata
- *   5. The page is REMOVED from the free list — nobody else can use it
- *
- * GFP_KERNEL = "Get Free Page, Kernel context" meaning:
- *   - We're in process context (not an interrupt handler)
- *   - We CAN sleep if needed (allocator may wait for pages)
- *   - If memory is tight, it may trigger reclamation or even OOM killer
+ * Why GFP_KERNEL? It stands for "Get Free Page, Kernel context". It tells the 
+ * OS that we're allowed to sleep if memory is currently tight, and importantly, 
+ * it directly pulls a physical 4KB frame out of circulation. The rest of the OS 
+ * literally can't touch this memory anymore until we deflate.
  * ════════════════════════════════════════════════════════════════ */
 
 static int balloon_inflate(int target)
@@ -278,16 +259,10 @@ static int balloon_inflate(int target)
 }
 
 /* ════════════════════════════════════════════════════════════════
- * DEFLATE: RETURN PAGES TO THE KERNEL'S BUDDY ALLOCATOR
+ * DEFLATE: GIVING BACK MEMORY 
  *
- * Kernel equivalent of do_deflate() in guest.c.
- *
- * In guest.c:   free(pages_held[--page_count]);  // return to userspace heap
- * Here:         __free_page(bp->page);            // return to buddy allocator
- *
- * __free_page() puts the page back on the buddy allocator's free list.
- * Any process or kernel subsystem can now use it. This is how a
- * hypervisor "gives memory back" to a VM after deflation.
+ * The reverse operation. `__free_page()` puts the page right back on the 
+ * buddy allocator's free list. It's like we never took it.
  * ════════════════════════════════════════════════════════════════ */
 
 static int balloon_deflate(int target)
