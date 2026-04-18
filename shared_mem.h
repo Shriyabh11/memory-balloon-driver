@@ -56,6 +56,7 @@ struct balloon_config
     int32_t max_pages;    // max balloon size per VM (in pages)
     int32_t inflate_step; // pages to grab per inflate command
     int32_t loop_delay;   // seconds between host decisions
+    int32_t vm_weights[MAX_VMS_LIMIT]; // weight assigned to each VM (1-10)
     int32_t config_ready; // 0=not ready, 1=host finished writing config
 };
 

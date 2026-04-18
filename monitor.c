@@ -144,8 +144,8 @@ int main(void)
             if (cmd == CMD_DEFLATE) cmd_str = "DEFLATE";
 
             printf("║                                                              ║\n");
-            printf("║  VM%-2d  %s  %s                                  ║\n",
-                   i + 1, status_str(ready), pressure_str(pressure));
+            printf("║  VM%-2d (W:%-2d) %s  %s                           ║\n",
+                   i + 1, cfg->vm_weights[i], status_str(ready), pressure_str(pressure));
             printf("║    [%s] %4d/%4d pages                  ║\n",
                    bar, pages, max_pages);
             printf("║    %5dKB held | peak %d | cmd: %-7s                      ║\n",

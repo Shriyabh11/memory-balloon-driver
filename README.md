@@ -339,15 +339,105 @@ VMs: 2, Max: 200 pages (800KB each), Step: 25, Delay: 3s
 
 ---
 
+## Kernel Module Version
+
+In addition to the userspace simulation above, this project includes a **real Linux kernel module** (`kernel/`) that runs at ring 0:
+
+### What's Different?
+
+| Userspace Simulation | Kernel Module |
+|---|---|
+| `malloc(4096)` | `alloc_page(GFP_KERNEL)` — real buddy allocator |
+| `free(ptr)` | `__free_page(page)` — real page freeing |
+| `printf()` | `printk()` → visible in `dmesg` |
+| `/tmp/balloon_*` shared memory | `/dev/balloon_ctl` ioctl device + `/proc/balloon` |
+| Simulated pressure (random) | Real pressure via `si_meminfo()` |
+| Runs as user process (ring 3) | Runs as `.ko` kernel module (ring 0) |
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                      USERSPACE                              │
+│                                                             │
+│  ┌──────────────┐              ┌──────────────┐            │
+│  │  host_kmod    │              │ monitor_kmod  │           │
+│  │  (host daemon)│              │ (read-only)   │           │
+│  └──────┬───────┘              └──────┬────────┘           │
+│         │ ioctl()                     │ ioctl()            │
+├─────────┼─────────────────────────────┼────────────────────┤
+│         ▼          KERNEL SPACE       ▼                     │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │           balloon_kmod.ko  (Loadable Kernel Module)   │  │
+│  │                                                       │  │
+│  │  • alloc_page(GFP_KERNEL) / __free_page()            │  │
+│  │  • Tracks pages in kernel linked list                 │  │
+│  │  • /dev/balloon_ctl  — ioctl commands                │  │
+│  │  • /proc/balloon     — live status                   │  │
+│  │  • printk()          — kernel ring buffer (dmesg)    │  │
+│  │  • si_meminfo()      — real memory pressure          │  │
+│  └──────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Quick Start
+
+```bash
+# Prerequisites (Ubuntu/Debian)
+sudo apt install build-essential linux-headers-$(uname -r) -y
+
+# Build
+cd kernel/
+make
+
+# Load module
+sudo insmod balloon_kmod.ko              # default: 200 pages max
+sudo insmod balloon_kmod.ko max_pages=500  # custom
+
+# Terminal 1: kernel logs
+sudo dmesg -w
+
+# Terminal 2: host daemon
+sudo ./host_kmod
+
+# Terminal 3: live monitor
+./monitor_kmod
+
+# Cleanup
+sudo rmmod balloon_kmod
+```
+
+### File Structure
+
+| File | Role |
+|------|------|
+| `kernel/balloon_kmod.c` | The kernel module — ring 0, `alloc_page`, `printk` |
+| `kernel/balloon_ioctl.h` | Shared ioctl definitions (kernel ↔ userspace contract) |
+| `kernel/host_kmod.c` | Userspace host daemon (sends ioctl commands) |
+| `kernel/monitor_kmod.c` | Userspace live monitor (reads status via ioctl) |
+| `kernel/Makefile` | Builds the `.ko` + userspace tools |
+| `kernel/demo.sh` | Automated demo script |
+| `kernel/DEMO_GUIDE.md` | **Step-by-step demo guide for professors** |
+
+> **📖 See [`kernel/DEMO_GUIDE.md`](kernel/DEMO_GUIDE.md) for a detailed 10–15 minute demo walkthrough.**
+
+---
+
 ## Cleanup
 
 If a process crashes and leaves shared memory behind:
 
 ```bash
-make clean              # removes binaries + /dev/shm/balloon_*
+make clean              # removes binaries + /tmp/balloon_*
 
 # or manually:
-rm -f /dev/shm/balloon_*
+rm -f /tmp/balloon_*
+```
+
+For the kernel module:
+```bash
+sudo rmmod balloon_kmod   # unload module (auto-frees all pages)
+cd kernel/ && make clean   # remove build artifacts
 ```
 
 Shared memory objects persist in `/dev/shm/` until explicitly unlinked. The host's `cleanup()` function handles this on graceful shutdown (Ctrl+C), but a crash may leave orphaned regions.

@@ -106,6 +106,18 @@ void ask_user_config(void)
     loop_delay = read_int("Delay (sec)", 1, 10);
     printf("  %d second(s)\n\n", loop_delay);
 
+    /* question 5: Ask for weights for each VM */
+    printf("─── Assign Weights to VMs (1-10) ─────────\n");
+    printf("Weight 1 = Important (keeps memory)\nWeight 10 = Expendable (balloon inflates aggressively)\n");
+    
+    int weights[MAX_VMS_LIMIT];
+    for(int i = 0; i < num_vms; i++) {
+        char prompt[64];
+        snprintf(prompt, sizeof(prompt), "Weight for VM%d", i + 1);
+        weights[i] = read_int(prompt, 1, 10);
+    }
+    printf("\n");
+
     /* summary box */
     printf("╔══════════════════════════════════════════╗\n");
     printf("║   YOUR CONFIG                            ║\n");
@@ -118,6 +130,10 @@ void ask_user_config(void)
     printf("║  Delay:        %-2d sec                    ║\n", loop_delay);
     printf("║  Total max:    %6dKB across all VMs    ║\n",
            num_vms * max_pages * (PAGE_SIZE_SIM / 1024));
+    printf("╠══════════════════════════════════════════╣\n");
+    for(int i = 0; i < num_vms; i++) {
+        printf("║  VM%-2d weight:  %-2d                        ║\n", i + 1, weights[i]);
+    }
     printf("╚══════════════════════════════════════════╝\n\n");
 
     /* write config to shared memory so guests can pick it up */
@@ -134,6 +150,9 @@ void ask_user_config(void)
     cfg->max_pages    = max_pages;
     cfg->inflate_step = inflate_step;
     cfg->loop_delay   = loop_delay;
+    for(int i = 0; i < num_vms; i++) {
+        cfg->vm_weights[i] = weights[i];
+    }
     cfg->config_ready = 1;
 
     host_log("Config published to %s\n\n", SHM_CONFIG_NAME);
@@ -202,13 +221,45 @@ void wait_for_guests(void)
     host_log("All guests connected!\n\n");
 }
 
-/* Return index of VM with fewest pages — best candidate to inflate */
-int find_idlest_vm(void)
+/* Helper to calculate ideal balloon pages based on weights */
+int calculate_ideal_share(int vm_idx)
+{
+    int total_balloon = 0;
+    int total_weight = 0;
+    
+    for (int i = 0; i < num_vms; i++) {
+        total_balloon += vms[i]->current_pages;
+        total_weight += cfg->vm_weights[i];
+    }
+
+    // Add exactly one step of virtual memory so there's always something to distribute
+    total_balloon += inflate_step;
+    
+    // Each VM's ideal share = (Total Balloon Space * My Weight) / Total Weight
+    int ideal = (total_balloon * cfg->vm_weights[vm_idx]) / total_weight;
+    
+    // Clamp to max_pages
+    if (ideal > max_pages) ideal = max_pages;
+    
+    return ideal;
+}
+
+/* Return index of VM furthest below its ideal fair-share — best candidate to inflate */
+int find_most_under_shared_vm(void)
 {
     int best = 0;
-    for (int i = 1; i < num_vms; i++) {
-        if (vms[i]->current_pages < vms[best]->current_pages)
+    int max_deficit = -999999;
+    
+    for (int i = 0; i < num_vms; i++) {
+        if (vms[i]->current_pages >= max_pages) continue;
+        
+        int ideal = calculate_ideal_share(i);
+        int deficit = ideal - vms[i]->current_pages; // High deficit = desperately needs inflating
+        
+        if (deficit > max_deficit) {
+            max_deficit = deficit;
             best = i;
+        }
     }
     return best;
 }
@@ -226,13 +277,20 @@ int find_pressured_vm(void)
     return worst;
 }
 
-/* Return index of VM holding the most pages */
-int find_fullest_vm(void)
+/* Return index of VM furthest above its ideal fair-share — best candidate to deflate (rebalance) */
+int find_most_over_shared_vm(void)
 {
     int best = 0;
-    for (int i = 1; i < num_vms; i++) {
-        if (vms[i]->current_pages > vms[best]->current_pages)
+    int max_surplus = -999999;
+    
+    for (int i = 0; i < num_vms; i++) {
+        int ideal = calculate_ideal_share(i);
+        int surplus = vms[i]->current_pages - ideal; // High surplus = hoarding too much
+        
+        if (surplus > max_surplus) {
+            max_surplus = surplus;
             best = i;
+        }
     }
     return best;
 }
@@ -334,8 +392,11 @@ void print_dashboard(int cycle)
         if (pressure == PRESSURE_LOW)      p_str = "LOW ";
         if (pressure == PRESSURE_CRITICAL) p_str = "CRIT";
 
-        printf("│ VM%-2d %s %4dp %5dKB  %s  peak:%d │\n",
-               i + 1, bar, pages, kb, p_str, peak);
+        int weight   = cfg->vm_weights[i];
+        int ideal    = calculate_ideal_share(i);
+
+        printf("│ VM%-2d (W:%d) %s %4dp %5dKB  %s  target:%d│\n",
+               i + 1, weight, bar, pages, kb, p_str, ideal);
     }
 
     printf("├──────────────────────────────────────────────────────────┤\n");
@@ -432,18 +493,18 @@ int main(void)
             }
         }
 
-        /* priority 2: inflate the idlest VM */
-        int idlest = find_idlest_vm();
+        /* priority 2: inflate the VM that is most under its fair share */
+        int idlest = find_most_under_shared_vm();
         inflate_vm(idlest);
 
         /* dashboard */
         print_dashboard(cycle);
 
-        /* every 4 cycles: trim the fullest VM to keep things balanced */
+        /* every 4 cycles: trim the VM hoarding the most above its fair share */
         if (cycle % 4 == 0) {
-            int fullest = find_fullest_vm();
+            int fullest = find_most_over_shared_vm();
             if (vms[fullest]->current_pages > 0) {
-                host_log("Periodic rebalance — trimming VM%d\n", fullest + 1);
+                host_log("Periodic rebalance — trimming over-shared VM%d\n", fullest + 1);
                 deflate_vm(fullest, 0);
                 print_dashboard(cycle);
             }

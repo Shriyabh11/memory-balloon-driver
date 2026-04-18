@@ -5,6 +5,23 @@ monitor
 
 # Object files
 *.o
+*.o.cmd
+*.ko
+*.ko.cmd
+*.mod
+*.mod.c
+*.mod.cmd
+
+# Kernel build artifacts
+kernel/modules.order
+kernel/Module.symvers
+kernel/.tmp_versions/
+kernel/.cache.mk
+kernel/.*.cmd
+
+# Kernel userspace tools
+kernel/host_kmod
+kernel/monitor_kmod
 
 # Editor/IDE files
 .vscode/

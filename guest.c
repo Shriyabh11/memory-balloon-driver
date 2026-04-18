@@ -39,6 +39,10 @@ static int stat_total_inflated = 0;
 static int stat_total_deflated = 0;
 static int stat_peak_pages     = 0;
 
+// OOM simulation state
+static int critical_pressure_ticks = 0;
+#define MAX_CRITICAL_TICKS 5
+
 //timestamped logging
 static void vm_log(const char *fmt, ...)
 {
@@ -211,6 +215,46 @@ void do_deflate(int target)
 }
 
 /*
+ * OOM Killer — when pressure stays CRITICAL with no relief,
+ * simulate Linux forcefully killing a process to reclaim memory.
+ * We instantly free 25% of the balloon to save the VM from crashing.
+ */
+void trigger_oom_killer(void)
+{
+    const char *fake_procs[] = {"mysqld", "node", "java", "python", "chrome", "php-fpm"};
+    int p_idx = rand() % 6;
+    int pid = 1000 + (rand() % 9000);
+    int score = 800 + (rand() % 200);
+
+    /* Print dramatic alert */
+    printf("\n");
+    vm_log("\033[31m🚨 OOM KILLER INVOKED: Out of memory. Killed process %d (%s) total-vm:%dKB, anon-rss:%dKB, oom_score_adj:%d\033[0m\n",
+           pid, fake_procs[p_idx], (page_count * 4) + 12400, (page_count * 4), score);
+    
+    int pages_to_drop = page_count / 4; // Drop 25% 
+    if (pages_to_drop < 10) pages_to_drop = 10;
+    
+    vm_log("\033[31m🚨 OOM Recovery: Spontaneously dropping %d pages to survive!\033[0m\n", pages_to_drop);
+    printf("\n");
+
+    int target = page_count - pages_to_drop;
+    if (target < 0) target = 0;
+
+    /* Manually jump into deflation logic without host permission */
+    int freed = 0;
+    while (page_count > target) {
+        page_count--;
+        free(pages_held[page_count]);
+        pages_held[page_count] = NULL;
+        freed++;
+    }
+    
+    shm->current_pages = page_count;
+    shm->pressure = PRESSURE_NONE;
+    critical_pressure_ticks = 0;
+}
+
+/*
  * Simulate memory pressure — in a real VM this would come
  * from Linux's shrinker callbacks or /proc/meminfo.
  *
@@ -241,10 +285,20 @@ void simulate_pressure(void)
         shm->pressure = PRESSURE_NONE;
     }
 
-    if (shm->pressure == PRESSURE_CRITICAL)
-        vm_log("CRITICAL pressure! Balloon at %d%%, need memory back!\n", pct_full);
-    else if (shm->pressure == PRESSURE_LOW)
-        vm_log("Pressure: low (balloon at %d%%)\n", pct_full);
+    if (shm->pressure == PRESSURE_CRITICAL) {
+        critical_pressure_ticks++;
+        vm_log("\033[31m⚠ CRITICAL pressure!\033[0m Balloon at %d%%, need memory back! (Tick %d/%d)\n", 
+               pct_full, critical_pressure_ticks, MAX_CRITICAL_TICKS);
+        
+        if (critical_pressure_ticks >= MAX_CRITICAL_TICKS) {
+            trigger_oom_killer();
+        }
+    } else {
+        critical_pressure_ticks = 0; // Host relieved pressure
+        if (shm->pressure == PRESSURE_LOW) {
+            vm_log("\033[33mPressure: low\033[0m (balloon at %d%%)\n", pct_full);
+        }
+    }
 }
 
 /* ── signal + cleanup ── */
